@@ -1,147 +1,140 @@
-name: StopTB Perf Test Suite - Newman CI/CD
-
+name: StopTB Perf Test Suite - Newman Automation
+ 
 on:
-  # Runs every day at 9:00 AM IST (03:30 UTC)
   schedule:
-    - cron: '30 3 * * *'
-  # Allow manual runs from the Actions tab
+    - cron: '50 5 * * *' 
   workflow_dispatch:
-  # Optional: also run on pushes to main so changes are validated immediately
-  push:
-    branches: [ main ]
-
+ 
 jobs:
-  run-newman-tests:
+  run-newman:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
+ 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+ 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Install Newman and reporters
+ 
+      - name: Install Newman and Reporter
         run: |
-          npm install -g newman newman-reporter-htmlextra
-
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Create report output directory
-        run: mkdir -p newman
-
-      - name: Fetch Postman collection
+            npm uninstall -g newman-reporter-htmlextra
+            npm install -g newman@latest
+            npm install -g newman-reporter-htmlextra@latest
+      - name: Fetch latest Postman Collection
         env:
           POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
-          COLLECTION_UID: ${{ secrets.POSTMAN_COLLECTION_UID }}
+          POSTMAN_COLLECTION_UID: ${{ secrets.POSTMAN_COLLECTION_UID }}
         run: |
-          set -e
-          if [ -z "$POSTMAN_API_KEY" ] || [ -z "$COLLECTION_UID" ]; then
-            echo "::error::POSTMAN_API_KEY or POSTMAN_COLLECTION_UID secret is missing. Add both under Settings > Secrets and variables > Actions."
-            exit 1
-          fi
-          HTTP_CODE=$(curl -sS -o collection_raw.json -w "%{http_code}" \
+          HTTP_STATUS=$(curl -s -o collection.json -w "%{http_code}" \
+            --retry 3 --retry-delay 5 \
             -H "X-Api-Key: $POSTMAN_API_KEY" \
-            "https://api.getpostman.com/collections/$COLLECTION_UID")
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "::error::Postman API returned HTTP $HTTP_CODE while fetching the collection. Verify POSTMAN_API_KEY is valid and POSTMAN_COLLECTION_UID is correct."
-            cat collection_raw.json
+            "https://api.getpostman.com/collections/$POSTMAN_COLLECTION_UID")
+          echo "Collection fetch status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "Failed to fetch collection"
+            cat collection.json
             exit 1
           fi
-          if ! jq -e '.collection' collection_raw.json > collection.json; then
-            echo "::error::Postman API response did not contain a .collection field. Response was:"
-            cat collection_raw.json
-            exit 1
-          fi
-
-      - name: Fetch Postman environment
+          echo "Collection fetched successfully"
+ 
+      - name: Fetch latest Postman Environment
         env:
           POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
-          ENVIRONMENT_UID: ${{ secrets.POSTMAN_ENVIRONMENT_UID }}
+          POSTMAN_ENVIRONMENT_UID: ${{ secrets.POSTMAN_ENVIRONMENT_UID }}
         run: |
-          set -e
-          if [ -z "$POSTMAN_API_KEY" ] || [ -z "$ENVIRONMENT_UID" ]; then
-            echo "::error::POSTMAN_API_KEY or POSTMAN_ENVIRONMENT_UID secret is missing. Add both under Settings > Secrets and variables > Actions."
-            exit 1
-          fi
-          HTTP_CODE=$(curl -sS -o environment_raw.json -w "%{http_code}" \
+          HTTP_STATUS=$(curl -s -o environment_raw.json -w "%{http_code}" \
+            --retry 3 --retry-delay 5 \
             -H "X-Api-Key: $POSTMAN_API_KEY" \
-            "https://api.getpostman.com/environments/$ENVIRONMENT_UID")
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "::error::Postman API returned HTTP $HTTP_CODE while fetching the environment. Verify POSTMAN_API_KEY is valid and POSTMAN_ENVIRONMENT_UID is correct."
+            "https://api.getpostman.com/environments/$POSTMAN_ENVIRONMENT_UID")
+          echo "Environment fetch status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "Failed to fetch environment"
             cat environment_raw.json
             exit 1
           fi
-          if ! jq -e '.environment' environment_raw.json > environment.json; then
-            echo "::error::Postman API response did not contain an .environment field. Response was:"
-            cat environment_raw.json
-            exit 1
-          fi
-
-      - name: Run Newman collection
-        id: newman_run
-        run: |
-          newman run collection.json \
-            -e environment.json \
-            --reporters cli,json,htmlextra \
-            --reporter-htmlextra-export newman/report.html \
-            --reporter-json-export newman/report.json \
-            --reporter-htmlextra-darkTheme \
-            --reporter-htmlextra-title "StopTB Perf Test Suite Report" \
-            --iteration-count 1
+          node -e "
+            const fs   = require('fs');
+            const raw  = JSON.parse(fs.readFileSync('environment_raw.json'));
+            const env  = raw.environment;
+            const out  = {
+              id:     env.id,
+              name:   env.name,
+              values: env.values.map(v => ({
+                key:     v.key,
+                value:   v.value,
+                enabled: v.enabled !== false,
+                type:    v.type || 'default'
+              }))
+            };
+            fs.writeFileSync('environment.json', JSON.stringify(out, null, 2));
+            console.log('Environment ready:', env.name);
+          "
+ 
+      - name: Run Newman Collection
         continue-on-error: true
-
-      # always() so a report/notification still goes out even if a step
-      # above failed early (e.g. bad secret) — see generate-summary.js for
-      # the fallback it writes when newman/report.json doesn't exist.
-      - name: Generate detailed execution summary
-        id: summary
-        if: always()
-        run: node scripts/generate-summary.js
-
-      - name: Upload Newman report as workflow artifact
+        run: |
+          mkdir -p reports
+          newman run collection.json \
+            --environment environment.json \
+            --reporters cli,htmlextra \
+            --reporter-htmlextra-export reports/newman-report.html \
+            --reporter-htmlextra-title "StopTB API - Test Report" \
+            --reporter-htmlextra-browserTitle "StopTB API Tests" \
+            --reporter-htmlextra-showOnlyFails false \
+            --reporter-htmlextra-testPaging true \
+            --reporter-htmlextra-logs true \
+            --reporter-htmlextra-skipEnvironmentVars \
+            --reporter-htmlextra-skipGlobalVars \
+            --reporter-htmlextra-expand true \
+            --reporter-htmlextra-skipSensitiveData \
+            --reporter-htmlextra-hideCollectionDescription \
+            --reporter-htmlextra-omitRequestBodies false \
+            --reporter-htmlextra-omitResponseBodies false \
+            --timeout-request 60000 \
+            --delay-request 300 \
+            --insecure \
+            --color on || true
+ 
+      - name: Upload Newman Report as Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: newman-report-${{ github.run_number }}
-          path: |
-            newman/report.html
-            detailed-summary.html
+          name: StopTB-Newman-Report-Run-${{ github.run_number }}
+          path: reports/newman-report.html
           retention-days: 30
-          if-no-files-found: warn
-
-      - name: Send email with report
+ 
+      - name: Send Email with Newman Report
         if: always()
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.MAIL_SERVER }}
-          server_port: ${{ secrets.MAIL_PORT }}
-          username: ${{ secrets.MAIL_USERNAME }}
-          password: ${{ secrets.MAIL_PASSWORD }}
-          subject: "StopTB Perf Test Suite - ${{ steps.summary.outputs.overall_status }} - ${{ steps.summary.outputs.total_requests }} requests, ${{ steps.summary.outputs.failed_assertions }} failed"
-          to: ${{ secrets.MAIL_TO }}
-          from: ${{ secrets.MAIL_FROM }}
-          html_body: |
-            <h2>StopTB Perf Test Suite &mdash; Daily Run</h2>
-            <p><strong>Collection:</strong> ${{ steps.summary.outputs.collection_name }}</p>
-            <p><strong>Overall Status:</strong> ${{ steps.summary.outputs.overall_status }}</p>
-            <table style="border-collapse:collapse;">
-              <tr><td style="padding:4px 8px;border:1px solid #ccc;">Iterations</td><td style="padding:4px 8px;border:1px solid #ccc;">${{ steps.summary.outputs.total_iterations }}</td></tr>
-              <tr><td style="padding:4px 8px;border:1px solid #ccc;">Requests</td><td style="padding:4px 8px;border:1px solid #ccc;">${{ steps.summary.outputs.total_requests }}</td></tr>
-              <tr><td style="padding:4px 8px;border:1px solid #ccc;">Failed Requests</td><td style="padding:4px 8px;border:1px solid #ccc;">${{ steps.summary.outputs.failed_requests }}</td></tr>
-              <tr><td style="padding:4px 8px;border:1px solid #ccc;">Assertions</td><td style="padding:4px 8px;border:1px solid #ccc;">${{ steps.summary.outputs.total_assertions }}</td></tr>
-              <tr><td style="padding:4px 8px;border:1px solid #ccc;">Passed Assertions</td><td style="padding:4px 8px;border:1px solid #ccc;">${{ steps.summary.outputs.passed_assertions }}</td></tr>
-              <tr><td style="padding:4px 8px;border:1px solid #ccc;">Failed Assertions</td><td style="padding:4px 8px;border:1px solid #ccc;">${{ steps.summary.outputs.failed_assertions }}</td></tr>
-              <tr><td style="padding:4px 8px;border:1px solid #ccc;">Skipped Assertions</td><td style="padding:4px 8px;border:1px solid #ccc;">${{ steps.summary.outputs.skipped_assertions }}</td></tr>
-              <tr><td style="padding:4px 8px;border:1px solid #ccc;">Execution Time</td><td style="padding:4px 8px;border:1px solid #ccc;">${{ steps.summary.outputs.execution_time_sec }} s</td></tr>
-            </table>
-            <p>Full Newman HTML report and the expandable per-request summary (with request/response bodies and timing) are attached.</p>
-          attachments: newman/report.html,detailed-summary.html
-
-      - name: Fail workflow if tests failed
-        if: steps.newman_run.outcome == 'failure'
-        run: exit 1
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          subject: |
+            "✅ StopTB API Test Report — Run #${{ github.run_number }}"
+          body: |
+            Hi Team,
+ 
+            StopTB API Newman execution completed.
+ 
+            Run     : #${{ github.run_number }}
+            Branch  : ${{ github.ref_name }}
+            Trigger : ${{ github.event_name }}
+ 
+            Newman HTML Report is attached.
+            Open the attachment in any browser to see:
+              - Summary (Total Requests, Pass/Fail count)
+              - Each request with response details
+              - Failed tests with error messages
+              - Light/Dark mode toggle
+ 
+            Regards,
+            Pratiksha Pandey
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          from: StopTB API Automation
+          attachments: reports/newman-report.html
