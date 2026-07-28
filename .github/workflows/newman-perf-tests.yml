@@ -31,28 +31,56 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      - name: Create report output directory
+        run: mkdir -p newman
+
       - name: Fetch Postman collection
         env:
           POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
           COLLECTION_UID: ${{ secrets.POSTMAN_COLLECTION_UID }}
         run: |
-          curl -s -H "X-Api-Key: $POSTMAN_API_KEY" \
-            "https://api.getpostman.com/collections/$COLLECTION_UID" \
-            -o collection_raw.json
-          jq '.collection' collection_raw.json > collection.json
+          set -e
+          if [ -z "$POSTMAN_API_KEY" ] || [ -z "$COLLECTION_UID" ]; then
+            echo "::error::POSTMAN_API_KEY or POSTMAN_COLLECTION_UID secret is missing. Add both under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          HTTP_CODE=$(curl -sS -o collection_raw.json -w "%{http_code}" \
+            -H "X-Api-Key: $POSTMAN_API_KEY" \
+            "https://api.getpostman.com/collections/$COLLECTION_UID")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Postman API returned HTTP $HTTP_CODE while fetching the collection. Verify POSTMAN_API_KEY is valid and POSTMAN_COLLECTION_UID is correct."
+            cat collection_raw.json
+            exit 1
+          fi
+          if ! jq -e '.collection' collection_raw.json > collection.json; then
+            echo "::error::Postman API response did not contain a .collection field. Response was:"
+            cat collection_raw.json
+            exit 1
+          fi
 
       - name: Fetch Postman environment
         env:
           POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
           ENVIRONMENT_UID: ${{ secrets.POSTMAN_ENVIRONMENT_UID }}
         run: |
-          curl -s -H "X-Api-Key: $POSTMAN_API_KEY" \
-            "https://api.getpostman.com/environments/$ENVIRONMENT_UID" \
-            -o environment_raw.json
-          jq '.environment' environment_raw.json > environment.json
-
-      - name: Create report output directory
-        run: mkdir -p newman
+          set -e
+          if [ -z "$POSTMAN_API_KEY" ] || [ -z "$ENVIRONMENT_UID" ]; then
+            echo "::error::POSTMAN_API_KEY or POSTMAN_ENVIRONMENT_UID secret is missing. Add both under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          HTTP_CODE=$(curl -sS -o environment_raw.json -w "%{http_code}" \
+            -H "X-Api-Key: $POSTMAN_API_KEY" \
+            "https://api.getpostman.com/environments/$ENVIRONMENT_UID")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Postman API returned HTTP $HTTP_CODE while fetching the environment. Verify POSTMAN_API_KEY is valid and POSTMAN_ENVIRONMENT_UID is correct."
+            cat environment_raw.json
+            exit 1
+          fi
+          if ! jq -e '.environment' environment_raw.json > environment.json; then
+            echo "::error::Postman API response did not contain an .environment field. Response was:"
+            cat environment_raw.json
+            exit 1
+          fi
 
       - name: Run Newman collection
         id: newman_run
@@ -67,11 +95,16 @@ jobs:
             --iteration-count 1
         continue-on-error: true
 
+      # always() so a report/notification still goes out even if a step
+      # above failed early (e.g. bad secret) — see generate-summary.js for
+      # the fallback it writes when newman/report.json doesn't exist.
       - name: Generate detailed execution summary
         id: summary
+        if: always()
         run: node scripts/generate-summary.js
 
       - name: Upload Newman report as workflow artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: newman-report-${{ github.run_number }}
@@ -79,8 +112,10 @@ jobs:
             newman/report.html
             detailed-summary.html
           retention-days: 30
+          if-no-files-found: warn
 
       - name: Send email with report
+        if: always()
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.MAIL_SERVER }}
