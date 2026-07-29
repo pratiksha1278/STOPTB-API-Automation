@@ -1,29 +1,30 @@
 name: STOPTB API - Newman Automation
- 
+
 on:
   schedule:
-    - cron: '30 4 * * *' 
+    - cron: '30 4 * * *'
   workflow_dispatch:
- 
+
 jobs:
   run-newman:
     runs-on: self-hosted
     timeout-minutes: 30
- 
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
- 
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
- 
+
       - name: Install Newman and Reporter
         run: |
             npm uninstall -g newman-reporter-htmlextra
             npm install -g newman@latest
             npm install -g newman-reporter-htmlextra@latest
+
       - name: Fetch latest Postman Collection
         env:
           POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
@@ -40,7 +41,7 @@ jobs:
             exit 1
           fi
           echo "Collection fetched successfully"
- 
+
       - name: Fetch latest Postman Environment
         env:
           POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
@@ -73,9 +74,12 @@ jobs:
             fs.writeFileSync('environment.json', JSON.stringify(out, null, 2));
             console.log('Environment ready:', env.name);
           "
- 
+
       - name: Run Newman Collection
         continue-on-error: true
+        env:
+          AMRIT_PASSWORD: ${{ secrets.AMRIT_PASSWORD }}
+          AMRIT_USERNAME: ${{ secrets.AMRIT_USERNAME }}
         run: |
           mkdir -p reports
           newman run collection.json \
@@ -100,7 +104,7 @@ jobs:
             --delay-request 300 \
             --insecure \
             --color on || true
- 
+
       - name: Upload Newman Report as Artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -108,7 +112,7 @@ jobs:
           name: STOPTB-API-Newman-Report-Run-${{ github.run_number }}
           path: reports/newman-report.html
           retention-days: 30
- 
+
       - name: Send Email with Newman Report
         if: always()
         uses: dawidd6/action-send-mail@v3
@@ -121,20 +125,20 @@ jobs:
             "✅ STOPTB API Test Report — Run #${{ github.run_number }}"
           body: |
             Hi Team,
- 
+
             FLW API Newman execution completed.
- 
+
             Run     : #${{ github.run_number }}
             Branch  : ${{ github.ref_name }}
             Trigger : ${{ github.event_name }}
- 
+
             Newman HTML Report is attached.
             Open the attachment in any browser to see:
               - Summary (Total Requests, Pass/Fail count)
               - Each request with response details
               - Failed tests with error messages
               - Light/Dark mode toggle
- 
+
             Regards,
             Pratiksha Pandey
           to: ${{ secrets.NOTIFY_EMAIL }}
