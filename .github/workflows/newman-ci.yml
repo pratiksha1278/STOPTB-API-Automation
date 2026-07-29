@@ -1,5 +1,4 @@
-name: StopTB Perf Test Suite - Newman Automation
- 
+name: STOPTB API - Newman Automation
  
 on:
   schedule:
@@ -83,8 +82,8 @@ jobs:
             --environment environment.json \
             --reporters cli,htmlextra \
             --reporter-htmlextra-export reports/newman-report.html \
-            --reporter-htmlextra-title "StopTB API - Test Report" \
-            --reporter-htmlextra-browserTitle "StopTB API Tests" \
+            --reporter-htmlextra-title "STOPTB API - Test Report" \
+            --reporter-htmlextra-browserTitle "FLW API Tests" \
             --reporter-htmlextra-showOnlyFails false \
             --reporter-htmlextra-testPaging true \
             --reporter-htmlextra-logs true \
@@ -104,7 +103,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: StopTB-API-Newman-Report-Run-${{ github.run_number }}
+          name: STOPTB-API-Newman-Report-Run-${{ github.run_number }}
           path: reports/newman-report.html
           retention-days: 30
  
@@ -117,11 +116,11 @@ jobs:
           username: ${{ secrets.SMTP_USER }}
           password: ${{ secrets.SMTP_PASS }}
           subject: |
-            "✅ StopTB API Test Report — Run #${{ github.run_number }}"
+            "✅ STOPTB API Test Report — Run #${{ github.run_number }}"
           body: |
             Hi Team,
  
-            StopTB API Newman execution completed.
+            FLW API Newman execution completed.
  
             Run     : #${{ github.run_number }}
             Branch  : ${{ github.ref_name }}
@@ -137,5 +136,5 @@ jobs:
             Regards,
             Pratiksha Pandey
           to: ${{ secrets.NOTIFY_EMAIL }}
-          from: StopTB API Automation
+          from: STOPTB API Automation
           attachments: reports/newman-report.html
