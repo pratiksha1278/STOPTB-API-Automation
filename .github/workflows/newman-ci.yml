@@ -18,9 +18,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Check connectivity
-        run: curl -v --max-time 10 https://amritdemo.piramalswasthya.org/common-api/user/userAuthenticate || echo "UNREACHABLE"
  
       - name: Install Newman and Reporter
         run: |
