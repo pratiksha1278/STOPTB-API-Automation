@@ -7,7 +7,7 @@ on:
  
 jobs:
   run-newman:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 30
  
     steps:
@@ -18,6 +18,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: Check connectivity
+        run: curl -v --max-time 10 https://amritdemo.piramalswasthya.org/common-api/user/userAuthenticate || echo "UNREACHABLE"
  
       - name: Install Newman and Reporter
         run: |
@@ -80,6 +83,8 @@ jobs:
           mkdir -p reports
           newman run collection.json \
             --environment environment.json \
+            --env-var "password=$AMRIT_PASSWORD" \
+            --env-var "username=$AMRIT_USERNAME" \
             --reporters cli,htmlextra \
             --reporter-htmlextra-export reports/newman-report.html \
             --reporter-htmlextra-title "STOPTB API - Test Report" \
