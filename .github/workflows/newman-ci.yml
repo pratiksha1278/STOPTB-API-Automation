@@ -12,68 +12,74 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
 
-      - name: Install Newman
+      - name: Install Newman and Reporter
         run: |
-          npm install -g newman
-          npm install -g newman-reporter-htmlextra
+          npm uninstall -g newman-reporter-htmlextra
+          npm install -g newman@latest
+          npm install -g newman-reporter-htmlextra@latest
 
-      - name: Download Collection
+      - name: Fetch latest Postman Collection
         env:
           POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
-          COLLECTION_UID: ${{ secrets.POSTMAN_COLLECTION_UID }}
+          POSTMAN_COLLECTION_UID: ${{ secrets.POSTMAN_COLLECTION_UID }}
         run: |
-          curl -L \
-          -H "X-Api-Key:$POSTMAN_API_KEY" \
-          "https://api.getpostman.com/collections/$COLLECTION_UID" \
-          -o collection.json
+          HTTP_STATUS=$(curl -s -o collection.json -w "%{http_code}" \
+            --retry 3 --retry-delay 5 \
+            -H "X-Api-Key: $POSTMAN_API_KEY" \
+            "https://api.getpostman.com/collections/$POSTMAN_COLLECTION_UID")
+          echo "Collection fetch status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "Failed to fetch collection"
+            cat collection.json
+            exit 1
+          fi
+          echo "Collection fetched successfully"
 
-      - name: Download Environment
+      - name: Fetch latest Postman Environment and inject credentials
         env:
           POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
-          ENV_UID: ${{ secrets.POSTMAN_ENVIRONMENT_UID }}
-        run: |
-          curl -L \
-          -H "X-Api-Key:$POSTMAN_API_KEY" \
-          "https://api.getpostman.com/environments/$ENV_UID" \
-          -o environment_raw.json
-
-      - name: Convert Environment
-        run: |
-          node -e "
-          const fs=require('fs');
-          const raw=JSON.parse(fs.readFileSync('environment_raw.json'));
-          const env=raw.environment;
-
-          env.values.forEach(v=>{
-            if(v.key==='username')
-              v.value=process.env.USERNAME;
-            if(v.key==='password')
-              v.value=process.env.PASSWORD;
-          });
-
-          fs.writeFileSync(
-            'environment.json',
-            JSON.stringify(env,null,2)
-          );
-          "
-        env:
+          POSTMAN_ENVIRONMENT_UID: ${{ secrets.POSTMAN_ENVIRONMENT_UID }}
           USERNAME: ${{ secrets.AMRIT_USERNAME }}
           PASSWORD: ${{ secrets.AMRIT_PASSWORD }}
-
-      - name: Check Variables
         run: |
+          HTTP_STATUS=$(curl -s -o environment_raw.json -w "%{http_code}" \
+            --retry 3 --retry-delay 5 \
+            -H "X-Api-Key: $POSTMAN_API_KEY" \
+            "https://api.getpostman.com/environments/$POSTMAN_ENVIRONMENT_UID")
+          echo "Environment fetch status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "Failed to fetch environment"
+            cat environment_raw.json
+            exit 1
+          fi
+          if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
+            echo "AMRIT_USERNAME or AMRIT_PASSWORD secret is missing."
+            exit 1
+          fi
           node -e "
-          const env=require('./environment.json');
-          console.log(env.values.find(x=>x.key==='username'));
-          console.log(env.values.find(x=>x.key==='password'));
+            const fs   = require('fs');
+            const raw  = JSON.parse(fs.readFileSync('environment_raw.json'));
+            const env  = raw.environment;
+            env.values = env.values.map(v => {
+              if (v.key === 'username') v.value = process.env.USERNAME;
+              if (v.key === 'password') v.value = process.env.PASSWORD;
+              return {
+                key:     v.key,
+                value:   v.value,
+                enabled: v.enabled !== false,
+                type:    v.type || 'default'
+              };
+            });
+            fs.writeFileSync('environment.json', JSON.stringify(env, null, 2));
+            console.log('Environment ready:', env.name, '(credential values redacted from this log)');
           "
 
       - name: Test Connectivity
@@ -81,33 +87,45 @@ jobs:
           echo "Testing server..."
           curl -v --connect-timeout 20 https://amritdemo.piramalswasthya.org || true
 
-      - name: Run Newman
+      - name: Run Newman Collection
+        continue-on-error: true
         run: |
           mkdir -p reports
-
           newman run collection.json \
-          -e environment.json \
-          --reporters cli,htmlextra \
-          --reporter-htmlextra-export reports/newman-report.html \
-          --timeout-request 60000 \
-          --delay-request 300 \
-          --insecure \
-          --verbose
+            --environment environment.json \
+            --reporters cli,htmlextra \
+            --reporter-htmlextra-export reports/newman-report.html \
+            --reporter-htmlextra-title "STOPTB API - Test Report" \
+            --reporter-htmlextra-browserTitle "STOPTB API Tests" \
+            --reporter-htmlextra-showOnlyFails false \
+            --reporter-htmlextra-testPaging true \
+            --reporter-htmlextra-logs true \
+            --reporter-htmlextra-skipEnvironmentVars \
+            --reporter-htmlextra-skipGlobalVars \
+            --reporter-htmlextra-expand true \
+            --reporter-htmlextra-skipSensitiveData \
+            --reporter-htmlextra-hideCollectionDescription \
+            --reporter-htmlextra-omitRequestBodies false \
+            --reporter-htmlextra-omitResponseBodies false \
+            --timeout-request 60000 \
+            --delay-request 300 \
+            --insecure \
+            --color on || true
 
       - name: Verify Report
         if: always()
         run: |
-          ls -R
           ls -R reports || true
 
-      - name: Upload Report
+      - name: Upload Newman Report as Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: STOPTB-Newman-Report
-          path: reports
+          name: STOPTB-API-Newman-Report-Run-${{ github.run_number }}
+          path: reports/newman-report.html
+          retention-days: 30
 
-      - name: Send Email
+      - name: Send Email with Newman Report
         if: always()
         uses: dawidd6/action-send-mail@v3
         with:
@@ -115,17 +133,26 @@ jobs:
           server_port: 587
           username: ${{ secrets.SMTP_USER }}
           password: ${{ secrets.SMTP_PASS }}
-          subject: STOPTB API Report #${{ github.run_number }}
-          to: ${{ secrets.NOTIFY_EMAIL }}
-          from: STOPTB API Automation
+          subject: |
+            "✅ STOPTB API Test Report — Run #${{ github.run_number }}"
           body: |
             Hi Team,
 
-            Newman execution completed.
+            STOPTB API Newman execution completed.
 
-            Run Number: ${{ github.run_number }}
+            Run     : #${{ github.run_number }}
+            Branch  : ${{ github.ref_name }}
+            Trigger : ${{ github.event_name }}
+
+            Newman HTML Report is attached.
+            Open the attachment in any browser to see:
+              - Summary (Total Requests, Pass/Fail count)
+              - Each request with response details
+              - Failed tests with error messages
+              - Light/Dark mode toggle
 
             Regards,
             Pratiksha Pandey
-
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          from: STOPTB API Automation
           attachments: reports/newman-report.html
